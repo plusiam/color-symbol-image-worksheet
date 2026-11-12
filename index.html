@@ -322,6 +322,25 @@
             }
         }
     </style>
+<style id="photo-20261112">
+/* 그림·사진 넣기(2026-11-12) */
+.photo-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.photo-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.photo-btn { font-size: 14px; font-weight: 700; padding: 10px 14px; min-height: 44px; border-radius: 8px; border: 1.5px solid #3b82f6; color: #1d4ed8; background: #fff; cursor: pointer; }
+.photo-btn:hover { background: #eff6ff; }
+.photo-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+.photo-btn-remove { border-color: #9ca3af; color: #4b5563; }
+.photo-btn-remove:hover { background: #f3f4f6; }
+#image-photo-figure { margin: 8px 0 0; padding: 6px; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; text-align: center; }
+#image-photo { display: inline-block; max-width: 100%; max-height: 280px; object-fit: contain; border-radius: 4px; }
+@media print {
+  /* 사진을 넣었으면 빈 그림 칸 대신 사진을 찍어 내고, 안 넣었으면 예전처럼 빈 그림 칸을 둔다 */
+  body.has-photo #image-drawing-area { display: none !important; }
+  #image-photo-figure { border: 1.5px solid #6b7280 !important; border-radius: 0 !important; padding: 4px !important; margin: 8px 0 !important; page-break-inside: avoid; }
+  #image-photo { max-height: 30mm !important; } /* 빈 그림 칸(100px)과 비슷한 높이: A4 가로 한 장에 들어가게 */
+  #image-photo-wrap { margin-top: 0 !important; }
+}
+</style>
 <style id="mobile-fix-20261110">
 /* 폰 화면 보정(2026-11-10): 좁은 화면에서 제목·학생 정보 줄·학습지 틀이 넘치거나 쪼개지지 않게 */
 @media screen and (max-width: 640px) {
@@ -435,6 +454,23 @@
                         <div id="image-drawing-area" class="hidden" style="display: none;">
                             <p class="text-center text-gray-400 pt-12">이미지를 그려주세요</p>
                         </div>
+
+                        <!-- 그림·사진 넣기(2026-11-12): 종이에 그린 그림을 찍거나 사진 파일을 골라 넣는다. 사진은 서버로 보내지 않고 이 기기에만 둔다. -->
+                        <div id="image-photo-wrap" class="mt-3">
+                            <p class="no-print text-sm font-semibold text-slate-700" data-html2canvas-ignore="true">그림이나 사진으로도 나타내 볼까요? <span class="font-normal text-slate-500">(안 넣어도 돼요)</span></p>
+                            <figure id="image-photo-figure" class="hidden">
+                                <img id="image-photo" alt="내가 넣은 그림·사진">
+                            </figure>
+                            <div class="no-print photo-buttons" data-html2canvas-ignore="true">
+                                <button type="button" id="photo-camera-btn" class="photo-btn">사진 찍기</button>
+                                <button type="button" id="photo-file-btn" class="photo-btn">사진 파일 고르기</button>
+                                <button type="button" id="photo-remove-btn" class="photo-btn photo-btn-remove hidden">사진 빼기</button>
+                            </div>
+                            <p class="no-print text-xs text-slate-500 mt-2 leading-relaxed" data-html2canvas-ignore="true">내가 그린 그림이나 직접 찍은 사진을 넣어요. 얼굴은 나오지 않게 찍어요.<br>사진은 이 기기에만 남아요.</p>
+                            <!-- 파일 입력에는 id를 주지 않는다(자동 저장이 입력값을 id로 다루므로 섞이지 않게) -->
+                            <input type="file" accept="image/*" capture="environment" class="photo-input photo-input-camera" tabindex="-1" aria-hidden="true">
+                            <input type="file" accept="image/*" class="photo-input photo-input-file" tabindex="-1" aria-hidden="true">
+                        </div>
                     </div>
                     <div>
                         <h4 class="font-semibold text-slate-800">Why did you choose this image?
@@ -470,7 +506,7 @@
             
             <!-- 개선사항 표시 -->
             <div class="mt-4 text-center text-xs text-slate-400">
-                ✨ 개선사항: 자동 높이 조정 + 줄바꿈 완전 보존 + A4 가로형 인쇄 최적화 + 한글 텍스트 잘림 방지
+                ✨ 개선사항: 자동 높이 조정 + 줄바꿈 완전 보존 + A4 가로형 인쇄 최적화 + 한글 텍스트 잘림 방지 + Image 칸에 그림·사진 넣기
             </div>
             
             <!-- 인쇄 사용법 안내 -->
@@ -666,6 +702,7 @@
                     });
                     
                     localStorage.removeItem(LOCAL_STORAGE_KEY);
+                    if (window.clearCsiPhoto) window.clearCsiPhoto();
                     showNotification('모든 내용이 초기화되었습니다.', 'success');
                     
                     document.getElementById('grade')?.focus();
@@ -764,6 +801,90 @@
                     loadingSpinner.classList.add('hidden');
                 }
             }
+
+            // --- 그림·사진 넣기(2026-11-12) ---
+            // 사진은 서버로 보내지 않는다. 기기 안에서 작게 줄여(긴 쪽 1280px, JPEG) 이 기기의 브라우저 저장소(IndexedDB)에만 둔다.
+            const photoFigure = document.getElementById('image-photo-figure');
+            const photoImg = document.getElementById('image-photo');
+            const photoRemoveBtn = document.getElementById('photo-remove-btn');
+            const photoCameraBtn = document.getElementById('photo-camera-btn');
+            const photoFileBtn = document.getElementById('photo-file-btn');
+            const photoCameraInput = document.querySelector('.photo-input-camera');
+            const photoFileInput = document.querySelector('.photo-input-file');
+            // 카메라가 달린 터치 기기에서만 「사진 찍기」를 보인다(PC에서는 두 단추가 같은 파일 창을 열어 헷갈리므로)
+            if (!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches)) photoCameraBtn.classList.add('hidden');
+
+            const photoStore = (() => {
+                const DB = 'csi-worksheet', ST = 'kv';
+                const open = () => new Promise((res, rej) => {
+                    const r = indexedDB.open(DB, 1);
+                    r.onupgradeneeded = () => r.result.createObjectStore(ST);
+                    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+                });
+                const run = async (mode, fn) => {
+                    const db = await open();
+                    return new Promise((res, rej) => {
+                        const t = db.transaction(ST, mode); const rq = fn(t.objectStore(ST));
+                        t.oncomplete = () => { db.close(); res(rq && rq.result); };
+                        t.onerror = t.onabort = () => { db.close(); rej(t.error); };
+                    });
+                };
+                return {
+                    get: () => run('readonly', st => st.get('photo')).catch(() => null),
+                    set: v => run('readwrite', st => v ? st.put(v, 'photo') : st.delete('photo')).then(() => true).catch(() => false)
+                };
+            })();
+
+            function showPhoto(dataUrl) {
+                const has = !!dataUrl;
+                if (has) photoImg.src = dataUrl; else photoImg.removeAttribute('src');
+                photoFigure.classList.toggle('hidden', !has);
+                photoRemoveBtn.classList.toggle('hidden', !has);
+                document.body.classList.toggle('has-photo', has);
+                photoFileBtn.textContent = has ? '다른 사진으로 바꾸기' : '사진 파일 고르기';
+            }
+
+            function shrinkPhoto(file, maxSide = 1280, quality = 0.82) {
+                return new Promise((resolve, reject) => {
+                    const url = URL.createObjectURL(file);
+                    const img = new Image();
+                    img.onload = () => {
+                        try {
+                            const k = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+                            const w = Math.max(1, Math.round(img.naturalWidth * k)), h = Math.max(1, Math.round(img.naturalHeight * k));
+                            const c = document.createElement('canvas'); c.width = w; c.height = h;
+                            const ctx = c.getContext('2d');
+                            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); // 투명 배경 그림은 흰 바탕으로
+                            ctx.drawImage(img, 0, 0, w, h);
+                            resolve(c.toDataURL('image/jpeg', quality));
+                        } catch (e) { reject(e); } finally { URL.revokeObjectURL(url); }
+                    };
+                    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('열 수 없는 사진')); };
+                    img.src = url;
+                });
+            }
+
+            async function handlePhotoFile(input) {
+                const file = input.files && input.files[0];
+                input.value = '';
+                if (!file) return;
+                try {
+                    const dataUrl = await shrinkPhoto(file);
+                    showPhoto(dataUrl);
+                    const saved = await photoStore.set(dataUrl);
+                    showNotification(saved ? '사진을 넣었어요.' : '사진을 넣었어요. 이 기기에는 자동 저장이 안 되니 「이미지로 저장」을 해 두세요.', 'success');
+                } catch (e) {
+                    showNotification('이 사진은 열 수 없어요. 다른 사진으로 해 보세요.', 'error');
+                }
+            }
+
+            photoCameraBtn.addEventListener('click', () => photoCameraInput.click());
+            photoFileBtn.addEventListener('click', () => photoFileInput.click());
+            photoCameraInput.addEventListener('change', () => handlePhotoFile(photoCameraInput));
+            photoFileInput.addEventListener('change', () => handlePhotoFile(photoFileInput));
+            photoRemoveBtn.addEventListener('click', async () => { showPhoto(null); await photoStore.set(null); showNotification('사진을 뺐어요.', 'success'); });
+            window.clearCsiPhoto = async () => { showPhoto(null); await photoStore.set(null); };
+            photoStore.get().then(v => { if (v) showPhoto(v); });
 
             // --- Enter 키 네비게이션 ---
             const inputs = document.querySelectorAll('input[type="text"], input[type="color"]');

@@ -331,6 +331,19 @@
 .photo-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
 .photo-btn-remove { border-color: #9ca3af; color: #4b5563; }
 .photo-btn-remove:hover { background: #f3f4f6; }
+/* 화면 안에서 사진 찍기(2026-11-14): PC·노트북의 웹캠용 */
+#webcam-dialog { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15, 23, 42, .6); }
+#webcam-dialog.hidden, #webcam-dialog .hidden { display: none; }
+.webcam-box { width: min(720px, 100%); max-height: 100%; overflow: auto; background: #fff; border-radius: 16px; padding: 20px; }
+.webcam-box h2 { font-size: 20px; font-weight: 800; color: #1e293b; }
+.webcam-note { margin: 4px 0 12px; font-size: 14px; color: #475569; line-height: 1.5; }
+.webcam-stage { display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; background: #0f172a; border-radius: 10px; overflow: hidden; }
+.webcam-stage video, .webcam-stage img { width: 100%; height: 100%; object-fit: contain; }
+.webcam-msg { min-height: 1.5em; margin-top: 8px; font-size: 14px; font-weight: 700; color: #b45309; line-height: 1.5; }
+.webcam-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.webcam-primary { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+.webcam-primary:hover { background: #1e40af; }
+.webcam-primary:disabled { opacity: .5; cursor: default; }
 #image-photo-figure { margin: 8px 0 0; padding: 6px; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; text-align: center; }
 #image-photo { display: inline-block; max-width: 100%; max-height: 280px; object-fit: contain; border-radius: 4px; }
 @media print {
@@ -529,6 +542,25 @@
         </footer>
     </div>
     
+    <!-- 화면 안에서 사진 찍기(2026-11-14): 카메라 영상은 이 기기 안에서만 쓰고 어디로도 보내지 않는다. 창을 닫으면 카메라가 꺼진다. -->
+    <div id="webcam-dialog" class="no-print hidden" data-html2canvas-ignore="true" role="dialog" aria-modal="true" aria-labelledby="webcam-title">
+        <div class="webcam-box">
+            <h2 id="webcam-title">사진 찍기</h2>
+            <p class="webcam-note">내가 그린 그림이나 물건을 카메라 앞에 대고 찍어요. 얼굴은 나오지 않게 해요.</p>
+            <div class="webcam-stage">
+                <video id="webcam-video" autoplay playsinline muted></video>
+                <img id="webcam-shot" class="hidden" alt="방금 찍은 사진">
+            </div>
+            <p id="webcam-msg" class="webcam-msg" aria-live="polite"></p>
+            <div class="webcam-actions">
+                <button type="button" id="webcam-snap" class="photo-btn webcam-primary">찍기</button>
+                <button type="button" id="webcam-retake" class="photo-btn hidden">다시 찍기</button>
+                <button type="button" id="webcam-use" class="photo-btn webcam-primary hidden">이 사진 넣기</button>
+                <button type="button" id="webcam-close" class="photo-btn photo-btn-remove">닫기</button>
+            </div>
+        </div>
+    </div>
+
     <div id="loading" class="no-print hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50" data-html2canvas-ignore="true">
         <div class="bg-white text-slate-800 font-bold py-6 px-8 rounded-lg flex items-center gap-3">
             <div class="spinner w-6 h-6 border-2 border-slate-300 border-t-slate-800 rounded-full"></div>
@@ -811,8 +843,11 @@
             const photoFileBtn = document.getElementById('photo-file-btn');
             const photoCameraInput = document.querySelector('.photo-input-camera');
             const photoFileInput = document.querySelector('.photo-input-file');
-            // 카메라가 달린 터치 기기에서만 「사진 찍기」를 보인다(PC에서는 두 단추가 같은 파일 창을 열어 헷갈리므로)
-            if (!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches)) photoCameraBtn.classList.add('hidden');
+            // 「사진 찍기」: 터치 기기(휴대폰·태블릿)는 기기 카메라 앱으로, PC·노트북은 웹캠으로 화면 안에서 찍는다.
+            // 터치 기기가 아니고 웹캠도 쓸 수 없는 브라우저에서는 단추를 내지 않는다(두 단추가 같은 파일 창을 열어 헷갈리므로).
+            const photoTouch = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+            const photoWebcamOk = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+            if (!photoTouch && !photoWebcamOk) photoCameraBtn.classList.add('hidden');
 
             const photoStore = (() => {
                 const DB = 'csi-worksheet', ST = 'kv';
@@ -878,7 +913,59 @@
                 }
             }
 
-            photoCameraBtn.addEventListener('click', () => photoCameraInput.click());
+            // --- 화면 안에서 사진 찍기(웹캠, 2026-11-14) ---
+            const wc = { dlg: document.getElementById('webcam-dialog'), video: document.getElementById('webcam-video'), shot: document.getElementById('webcam-shot'), msg: document.getElementById('webcam-msg'),
+                snap: document.getElementById('webcam-snap'), retake: document.getElementById('webcam-retake'), use: document.getElementById('webcam-use'), close: document.getElementById('webcam-close') };
+            let wcStream = null, wcBlob = null, wcUrl = null;
+            function wcShowShot(on) { // on: 찍은 사진 확인 화면, off: 카메라 화면
+                wc.video.classList.toggle('hidden', on); wc.shot.classList.toggle('hidden', !on);
+                wc.snap.classList.toggle('hidden', on); wc.retake.classList.toggle('hidden', !on); wc.use.classList.toggle('hidden', !on);
+            }
+            function wcDropShot() { if (wcUrl) { URL.revokeObjectURL(wcUrl); wcUrl = null; } wcBlob = null; wc.shot.removeAttribute('src'); }
+            function stopWebcam() { if (wcStream) { wcStream.getTracks().forEach(t => t.stop()); wcStream = null; } wc.video.srcObject = null; }
+            function closeWebcam() { stopWebcam(); wcDropShot(); wc.dlg.classList.add('hidden'); photoCameraBtn.focus(); }
+            async function openWebcam() {
+                wcDropShot(); wcShowShot(false); wc.snap.disabled = true; wc.msg.textContent = '카메라를 켜는 중이에요…';
+                wc.dlg.classList.remove('hidden'); wc.close.focus();
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+                    if (wc.dlg.classList.contains('hidden')) { stream.getTracks().forEach(t => t.stop()); return; } // 켜지는 사이에 창을 닫았으면 바로 끈다
+                    wcStream = stream; wc.video.srcObject = stream;
+                    try { await wc.video.play(); } catch (e) {}
+                    wc.msg.textContent = ''; wc.snap.disabled = false; wc.snap.focus();
+                } catch (e) {
+                    const n = e && e.name;
+                    wc.msg.textContent = (n === 'NotAllowedError' || n === 'SecurityError') ? '카메라를 쓸 수 없어요. 주소창에서 카메라 허용을 켜거나, 닫고 「사진 파일 고르기」를 써 주세요.'
+                        : (n === 'NotFoundError' || n === 'OverconstrainedError') ? '이 기기에서 카메라를 찾지 못했어요. 닫고 「사진 파일 고르기」를 써 주세요.'
+                        : '카메라를 켜지 못했어요. 닫고 「사진 파일 고르기」를 써 주세요.';
+                }
+            }
+            wc.snap.addEventListener('click', () => {
+                const v = wc.video; if (!v.videoWidth || !v.videoHeight) return;
+                const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+                c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+                c.toBlob(b => { if (!b) { wc.msg.textContent = '사진을 만들지 못했어요. 다시 찍어 주세요.'; return; }
+                    wcDropShot(); wcBlob = b; wcUrl = URL.createObjectURL(b); wc.shot.src = wcUrl; wcShowShot(true); wc.msg.textContent = ''; wc.use.focus(); }, 'image/jpeg', 0.92);
+            });
+            wc.retake.addEventListener('click', () => { wcDropShot(); wcShowShot(false); wc.snap.focus(); });
+            wc.use.addEventListener('click', async () => {
+                const b = wcBlob; if (!b) return;
+                wcBlob = null; // closeWebcam이 주소를 지우기 전에 사진을 넘긴다
+                try {
+                    const dataUrl = await shrinkPhoto(b);
+                    closeWebcam(); showPhoto(dataUrl);
+                    const saved = await photoStore.set(dataUrl);
+                    showNotification(saved ? '사진을 넣었어요.' : '사진을 넣었어요. 이 기기에는 자동 저장이 안 되니 「이미지로 저장」을 해 두세요.', 'success');
+                } catch (e) { closeWebcam(); showNotification('사진을 넣지 못했어요. 다시 찍어 보세요.', 'error'); }
+            });
+            wc.close.addEventListener('click', closeWebcam);
+            wc.dlg.addEventListener('click', e => { if (e.target === wc.dlg) closeWebcam(); });
+            document.addEventListener('keydown', e => { if (e.key === 'Escape' && !wc.dlg.classList.contains('hidden')) closeWebcam(); });
+            // 다른 탭으로 가거나 화면을 떠나면 카메라를 끈다
+            document.addEventListener('visibilitychange', () => { if (document.hidden && !wc.dlg.classList.contains('hidden')) closeWebcam(); });
+            window.addEventListener('pagehide', stopWebcam);
+
+            photoCameraBtn.addEventListener('click', () => { if (photoTouch) photoCameraInput.click(); else openWebcam(); });
             photoFileBtn.addEventListener('click', () => photoFileInput.click());
             photoCameraInput.addEventListener('change', () => handlePhotoFile(photoCameraInput));
             photoFileInput.addEventListener('change', () => handlePhotoFile(photoFileInput));
